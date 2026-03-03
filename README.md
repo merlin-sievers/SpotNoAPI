@@ -80,7 +80,7 @@ in these `<meta>` tags and build a fake Web API response based on it.
 
 ## License
 
-Note that this Project is a fork of spotipy (the last spotipy commit was `c52a29f6d255c8f1b9b0ff5c2ebf566174db2cb5`.
+Note that this Project is a fork of spotipy (the last spotipy commit was `c52a29f6d255c8f1b9b0ff5c2ebf566174db2cb5`).
 Up to that commit, the code was licensed under the MIT License (see the `LICENSE.spotipy.md`)
 
 I decided to relicense my fork under AGPLv3 (see `LICENSE.md`).
