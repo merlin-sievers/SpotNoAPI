@@ -169,7 +169,7 @@ class NoAPI():
     @cache
     @staticmethod
     def _get_soup(uri: str) -> BeautifulSoup:
-        logging.error(f"Fetching: {uri}")
+        logging.debug(f"Fetching: {uri}")
         resp = requests.get(uri)
         if not resp.ok:
             raise Exception(f'Failed to get uri "{uri}" - status code: {resp.status_code}')
