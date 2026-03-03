@@ -42,3 +42,6 @@ class SpotifyStateError(SpotifyOauthError):
         super(SpotifyOauthError, self).__init__(message, error,
                                                 error_description, *args,
                                                 **kwargs)
+
+class SpotifyNoAPIException(SpotifyBaseException):
+    pass

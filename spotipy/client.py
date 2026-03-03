@@ -1,3 +1,6 @@
+# Original (Spotipy): Copyright (c) 2021 Paul Lamere (MIT License)
+# spotNoAPI: Copyright (c) 2026 Merlin Sievers (AGPLv3)
+
 """ A simple and thin Python library for the Spotify Web API """
 
 __all__ = ["Spotify", "SpotifyException"]
@@ -5,12 +8,15 @@ __all__ = ["Spotify", "SpotifyException"]
 import json
 import logging
 import re
+from collections.abc import Iterable
 import warnings
 from collections import defaultdict
 
 import requests
 
 from spotipy.exceptions import SpotifyException
+from spotipy.noapi import Album, Artist, Search, Track
+from spotipy.noapi import NoAPI
 from spotipy.util import REQUESTS_SESSION, Retry
 
 logger = logging.getLogger(__name__)
@@ -230,15 +236,7 @@ class Spotify:
         self._session.mount('https://', adapter)
 
     def _auth_headers(self):
-        if self._auth:
-            return {"Authorization": f"Bearer {self._auth}"}
-        if not self.auth_manager:
-            return {}
-        try:
-            token = self.auth_manager.get_access_token(as_dict=False)
-        except TypeError:
-            token = self.auth_manager.get_access_token()
-        return {"Authorization": f"Bearer {token}"}
+        return {}
 
     def _internal_call(self, method, url, payload, params):
         args = dict(params=params)
@@ -314,26 +312,26 @@ class Spotify:
         logger.debug(f'RESULTS: {results}')
         return results
 
-    def _get(self, url, args=None, payload=None, **kwargs):
-        if args:
-            kwargs.update(args)
+    # def _get(self, url, args=None, payload=None, **kwargs):
+    #     if args:
+    #         kwargs.update(args)
+    #
+    #     return self._internal_call("GET", url, payload, kwargs)
 
-        return self._internal_call("GET", url, payload, kwargs)
+    # def _post(self, url, args=None, payload=None, **kwargs):
+    #     if args:
+    #         kwargs.update(args)
+    #     return self._internal_call("POST", url, payload, kwargs)
 
-    def _post(self, url, args=None, payload=None, **kwargs):
-        if args:
-            kwargs.update(args)
-        return self._internal_call("POST", url, payload, kwargs)
+    # def _delete(self, url, args=None, payload=None, **kwargs):
+    #     if args:
+    #         kwargs.update(args)
+    #     return self._internal_call("DELETE", url, payload, kwargs)
 
-    def _delete(self, url, args=None, payload=None, **kwargs):
-        if args:
-            kwargs.update(args)
-        return self._internal_call("DELETE", url, payload, kwargs)
-
-    def _put(self, url, args=None, payload=None, **kwargs):
-        if args:
-            kwargs.update(args)
-        return self._internal_call("PUT", url, payload, kwargs)
+    # def _put(self, url, args=None, payload=None, **kwargs):
+    #     if args:
+    #         kwargs.update(args)
+    #     return self._internal_call("PUT", url, payload, kwargs)
 
     def next(self, result):
         """ returns the next result given a paged result
@@ -357,7 +355,7 @@ class Spotify:
         else:
             return None
 
-    def track(self, track_id, market=None):
+    def track(self, track_id: str, market: str | None = None) -> Track:
         """ returns a single track given the track's ID, URI or URL
 
             Parameters:
@@ -365,10 +363,11 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code.
         """
 
+        _ = market
         trid = self._get_id("track", track_id)
-        return self._get("tracks/" + trid, market=market)
+        return NoAPI.get_track(trid)
 
-    def tracks(self, tracks, market=None):
+    def tracks(self, tracks: list[str], market: str | None = None) -> list[Track]:
         """ returns a list of tracks given a list of track IDs, URIs, or URLs
 
             Parameters:
@@ -376,10 +375,11 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code.
         """
 
+        _ = market
         tlist = [self._get_id("track", t) for t in tracks]
-        return self._get("tracks/?ids=" + ",".join(tlist), market=market)
+        return list(map(NoAPI.get_track, tlist))
 
-    def artist(self, artist_id):
+    def artist(self, artist_id: str) -> Artist:
         """ returns a single artist given the artist's ID, URI or URL
 
             Parameters:
@@ -387,9 +387,9 @@ class Spotify:
         """
 
         trid = self._get_id("artist", artist_id)
-        return self._get("artists/" + trid)
+        return NoAPI.get_artist(trid)
 
-    def artists(self, artists):
+    def artists(self, artists: Iterable[str]) -> list[Artist]:
         """ returns a list of artists given the artist IDs, URIs, or URLs
 
             Parameters:
@@ -397,7 +397,7 @@ class Spotify:
         """
 
         tlist = [self._get_id("artist", a) for a in artists]
-        return self._get("artists/?ids=" + ",".join(tlist))
+        return list(map(NoAPI.get_artist, tlist))
 
     def artist_albums(
         self, artist_id, album_type=None, include_groups=None, country=None, limit=20, offset=0
@@ -467,7 +467,7 @@ class Spotify:
         trid = self._get_id("artist", artist_id)
         return self._get("artists/" + trid + "/related-artists")
 
-    def album(self, album_id, market=None):
+    def album(self, album_id: str, market: str | None = None) -> Album:
         """ returns a single album given the album's ID, URIs or URL
 
             Parameters:
@@ -475,13 +475,11 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
         """
 
+        _ = market
         trid = self._get_id("album", album_id)
-        if market is not None:
-            return self._get("albums/" + trid + '?market=' + market)
-        else:
-            return self._get("albums/" + trid)
+        return NoAPI.get_album(trid)
 
-    def album_tracks(self, album_id, limit=50, offset=0, market=None):
+    def album_tracks(self, album_id: str, limit: int = 50, offset: int = 0, market: str | None = None):
         """ Get Spotify catalog information about an album's tracks
 
             Parameters:
@@ -493,11 +491,10 @@ class Spotify:
         """
 
         trid = self._get_id("album", album_id)
-        return self._get(
-            "albums/" + trid + "/tracks/", limit=limit, offset=offset, market=market
-        )
+        album = self.album(trid)
+        return album.album_tracks(limit, offset)
 
-    def albums(self, albums, market=None):
+    def albums(self, albums: str, market: str | None = None) -> list[Album]:
         """ returns a list of albums given the album IDs, URIs, or URLs
 
             Parameters:
@@ -505,11 +502,9 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
         """
 
+        _ = market
         tlist = [self._get_id("album", a) for a in albums]
-        if market is not None:
-            return self._get("albums/?ids=" + ",".join(tlist) + '&market=' + market)
-        else:
-            return self._get("albums/?ids=" + ",".join(tlist))
+        return list(map(NoAPI.get_album, tlist))
 
     def show(self, show_id, market=None):
         """ returns a single show given the show's ID, URIs or URL
@@ -590,7 +585,7 @@ class Spotify:
         tlist = [self._get_id("episode", e) for e in episodes]
         return self._get("episodes/?ids=" + ",".join(tlist), market=market)
 
-    def search(self, q, limit=10, offset=0, type="track", market=None):
+    def search(self, q: str , limit: int = 10, offset: int = 0, type: str = "track", market: str | None = None) -> Search:
         """ searches for an item
 
             Parameters:
@@ -605,9 +600,8 @@ class Spotify:
                 - market - An ISO 3166-1 alpha-2 country code or the string
                            from_token.
         """
-        return self._get(
-            "search", q=q, limit=limit, offset=offset, type=type, market=market
-        )
+        # TODO
+        return NoAPI.search(q, type)
 
     def search_markets(self, q, limit=10, offset=0, type="track", markets=None, total=None):
         """ (experimental) Searches multiple markets for an item
@@ -2114,7 +2108,7 @@ class Spotify:
                 path += f"?device_id={device_id}"
         return path
 
-    def _get_id(self, type, id):
+    def _get_id(self, type: str, id: str) -> str:
         uri_match = re.search(Spotify._regex_spotify_uri, id)
         if uri_match is not None:
             uri_match_groups = uri_match.groupdict()

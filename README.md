@@ -1,110 +1,88 @@
-# Spotipy
+# spotNoAPI
 
-##### Spotipy is a lightweight Python library for the [Spotify Web API](https://developer.spotify.com/documentation/web-api). With Spotipy you get full access to all of the music data provided by the Spotify platform.
+##### spotNoAPI aims to be a scraping-based drop-in replacement for spotipy, a lightweight Python library for the [Spotify Web API](https://developer.spotify.com/documentation/web-api).
 
-![Integration tests](https://github.com/spotipy-dev/spotipy/actions/workflows/integration_tests.yml/badge.svg?branch=master) [![Documentation Status](https://readthedocs.org/projects/spotipy/badge/?version=master)](https://spotipy.readthedocs.io/en/latest/?badge=master) [![Discord server](https://img.shields.io/discord/1244611850700849183?style=flat&logo=discord&logoColor=7289DA&color=7289DA)](https://discord.gg/HP6xcPsTPJ)
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Reporting Issues](#reporting-issues)
-- [Contributing](#contributing)
-
-## Features
-
-Spotipy supports all of the features of the Spotify Web API including access to all end points, and support for user authorization. For details on the capabilities you are encouraged to review the [Spotify Web API](https://developer.spotify.com/web-api/) documentation.
-
-## Installation
-
-```bash
-pip install spotipy
-```
-
-alternatively, for Windows users 
-
-```bash
-py -m pip install spotipy
-```
-
-or upgrade
-
-```bash
-pip install spotipy --upgrade
-```
+spotNoAPI does **not** aim to **fully** replace spotipy. See the [Features and Limitations](#features-and-limitations).
 
 ## Quick Start
 
-A full set of examples can be found in the [online documentation](http://spotipy.readthedocs.org/) and in the [Spotipy examples directory](https://github.com/spotipy-dev/spotipy-examples).
+You might be able to just specify as part of your dependencies,
+that your spotipy installation is actually located at this repo,
+or a cloned local version of it, and that's it.
 
-To get started, [install spotipy](#installation), create a new account or log in on https://developers.spotify.com/. Go to the [dashboard](https://developer.spotify.com/dashboard), create an app and add your new ID and SECRET (ID and SECRET can be found on an app setting) to your environment:
+As this project aims to be a drop-in replacement for spotipy, you can simply take a look at their documentation.
+Keep in mind the limitations of spotNoAPI's approach though.
 
-### Example without user authentication
+A full set of examples can be found in the [online documentation](http://spotipy.readthedocs.org/)
+and in the [Spotipy examples directory](https://github.com/spotipy-dev/spotipy-examples).
 
-```python
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+## What is this for?
 
-sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id="YOUR_APP_CLIENT_ID",
-                                                           client_secret="YOUR_APP_CLIENT_SECRET"))
+Using the Spotify Web API (SWA) comes at a cost. Quite literally.
+To use the SWA, you need to create a Spotify Developer Account and register an app there.
+This requires you to have a Spotify Premium Subscription.
 
-results = sp.search(q='weezer', limit=20)
-for idx, track in enumerate(results['tracks']['items']):
-    print(idx, track['name'])
-```
-Expected result:
-```
-0 Island In The Sun
-1 Say It Ain't So
-2 Buddy Holly
-.
-.
-.
-18 Troublemaker
-19 Feels Like Summer
-```
+Applications that depend on the SWA then need to distribute secrets to authenticate their app to their users.
+This means that users of the app or library are rate-limited and the secrets distrubted might be misused by third parties which amplifies this problem.
+FOSS projects that rely on the SWA usually circumvent this by passing the responsibility to create application credentials to the users,
+which increases the barrier of entry for these applications, especially for more novice users.
 
+While I see this as a general issue, with this project I only intend to solve a subset of that problem space.
+Specifically, there are some applications which do not even need lots of information that is not already easily scrapeable,
+like information about a specific track, album, artist or playlist.
 
-### Example with user authentication
+Projects that for example mirror public Spotify playlists to different streaming services,
+do not necessarily need many of the authenticated endpoints that the SWA provides.
 
-A redirect URI must be added to your application at [My Dashboard](https://developer.spotify.com/dashboard/applications) to access user authenticated features.
+## Features
 
-```python
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
+My personal favourite feature:
+Due to the responses you receive from these API calls not just being parsed json anymore,
+the function no longer just return `Any`.
+Instead I built special data types,
+that are fully typed and can still be used via the `__getitem__` operator (`["item"]`).
 
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id="YOUR_APP_CLIENT_ID",
-                                               client_secret="YOUR_APP_CLIENT_SECRET",
-                                               redirect_uri="YOUR_APP_REDIRECT_URI",
-                                               scope="user-library-read"))
+**TYPE HINTS 4 EVER!!!**
 
-results = sp.current_user_saved_tracks()
-for idx, item in enumerate(results['items']):
-    track = item['track']
-    print(idx, track['artists'][0]['name'], " – ", track['name'])
-```
-Expected result will be the list of music that you liked. For example if you liked Red and Sunflower, the result will be:
-```
-0 Post Malone  –  Sunflower - Spider-Man: Into the Spider-Verse
-1 Taylor Swift  –  Red
-```
+Moving to what is actually supported,
+I'm currently mostly just implementing the calls that I actually need
+and that are easy to implement.
 
+So far this is:
+- `track()`, `tracks()`
+- `artist()`, `artists()`
+- `album()`, `albums()`
+- `album_tracks()`
 
-## Reporting Issues
+## Limitations
 
-For common questions please check our [FAQ](FAQ.md).
+Basically everything else does not work.
 
-You can ask questions about Spotipy on
-[Stack Overflow](http://stackoverflow.com/questions/ask).
-Don’t forget to add the *Spotipy* tag, and any other relevant tags as well, before posting.
+I'm thinking about implementing `search()`,
+but I think you'd have to do scraping with a browser backend.
+So that means using selenium, for example, and these setups
+are usually easy to break in my experience.
 
-If you have suggestions, bugs or other issues specific to this library,
-file them [here](https://github.com/plamere/spotipy/issues).
-Or just send a pull request.
+## How does it work?
 
-## Contributing
+Did you ever share a spotify link and observed
+how it already gave you a little preview in the chat app you were using?
+This is done using the [Open Graph Protocol](https://ogp.me/).
+It basicaly just specifies that there are these helpful little `<meta>` tags
+in the `<head>` of a website which help apps generate a preview for that site.
+And they have quite a bit of information inside them,
+or at least enough to feed most of this library.
 
-If you are a developer with Python experience, and you would like to contribute to Spotipy, please be sure to follow the guidelines listed on documentation page
+So when you call `artist("https://open.spotify.com/artist/6PfSUFtkMVoDkx4MQkzOi3")`
+or even just `artist("6R1kfr0GIWnwxY4zW11Vag")`, this library will send
+a request to the specified artist page, collect the information mostly contained
+in these `<meta>` tags and build a fake Web API response based on it.
 
-> #### [Visit the guideline](https://spotipy.readthedocs.io/en/#contribute)
+## License
+
+Note that this Project is a fork of spotipy (the last spotipy commit was `c52a29f6d255c8f1b9b0ff5c2ebf566174db2cb5`.
+Up to that commit, the code was licensed under the MIT License (see the `LICENSE.spotipy.md`)
+
+I decided to relicense my fork under AGPLv3 (see `LICENSE.md`).
+If you use this project, please make sure you know your rights and duties.
+
