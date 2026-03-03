@@ -6,7 +6,7 @@ from functools import cache
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, override
 
 from bs4 import BeautifulSoup, Tag
 from bs4.element import PageElement
@@ -17,11 +17,15 @@ from spotipy.exceptions import SpotifyNoAPIException
 SPOTIFY_BASE_URL: str = 'https://open.spotify.com'
 
 
+# Should inherit dict, so isinstance(sth, dict) checks work
 @dataclass
-class Base:
+class Base(dict):  # pyright:ignore[reportMissingTypeArgument]
+
+    @override
     def __getitem__(self, key: str) -> Any:  # pyright:ignore[reportAny,reportExplicitAny]
         return getattr(self, key)  # pyright:ignore[reportAny]
 
+    @override
     def get(self, key: str, default: Any = None) -> Any:  # pyright:ignore[reportAny,reportExplicitAny]
         return getattr(self, key, default)  # pyright:ignore[reportAny]
 
