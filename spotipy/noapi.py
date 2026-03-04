@@ -246,7 +246,7 @@ class NoAPI():
         try:
             uri = f'{SPOTIFY_BASE_URL}/album/{album_id}'
             soup = NoAPI._get_soup(uri)
-            title = NoAPI._get_meta(soup, 'og:title', 'property')
+            title = NoAPI._get_meta(soup, 'og:title', 'property').split(' - Album by ')[0]
             if not soup.head:
                 raise SpotifyNoAPIException(f'Could not even get a head when fetching soup for {uri}.')
             results = soup.head.find_all(attrs={'name': 'music:musician'})
