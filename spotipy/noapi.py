@@ -290,5 +290,9 @@ class NoAPI():
         except Exception as e:
             raise SpotifyNoAPIException(f'Could not get track with id {playlist_id}: {e}')
 
-    def search(self, query: str, type: str) -> Search:
+    @staticmethod
+    def search(query: str, type: str) -> Search:
+        # TODO Implement this
+        _ = query
+        _ = type
         return Search([], [], [], [])
