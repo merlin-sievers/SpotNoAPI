@@ -111,6 +111,13 @@ class Track(SpotifyBase):
     explicit: bool = False
     popularity: int = 100
 
+    @property
+    def external_ids(self) -> dict[str, str]:
+        return {
+                'isrc': 'UNKNOWN_ISRC',
+                'ean': 'UNKNOWN_EAN',
+                'upc': 'UNKNOWN_UPC',
+                }
 
     @property
     def external_urls(self) -> dict[str, str]:
