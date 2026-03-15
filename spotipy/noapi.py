@@ -16,6 +16,7 @@ from spotipy.exceptions import SpotifyNoAPIException
 
 SPOTIFY_BASE_URL: str = 'https://open.spotify.com'
 
+logger = logging.getLogger(__name__)
 
 # Should inherit dict, so isinstance(sth, dict) checks work
 @dataclass
@@ -29,6 +30,26 @@ class Base(dict):  # pyright:ignore[reportMissingTypeArgument]
     def get(self, key: str, default: Any = None) -> Any:  # pyright:ignore[reportAny,reportExplicitAny]
         return getattr(self, key, default)  # pyright:ignore[reportAny]
 
+@dataclass
+class Image(Base):
+    url: str
+    confirmed_width: int | None = None
+    confirmed_height: int | None = None
+
+    @property
+    def width(self) -> int:
+        # TODO maybe check width by manually downloading the image
+        if self.confirmed_width is None:
+            return 300  # might be a good default, idk
+        return self.confirmed_width
+
+    @property
+    def height(self) -> int:
+        # TODO maybe check height by manually downloading the image
+        if self.confirmed_height is None:
+            return 300  # might be a good default, idk
+        return self.confirmed_height
+
 
 @dataclass
 class SpotifyBase(Base):
@@ -38,13 +59,6 @@ class SpotifyBase(Base):
     @property
     def uri(self) -> str:
         return f'spotify:{self.type}:{self.id}'
-
-
-@dataclass
-class Image(Base):
-    url: str
-    width: int = 640  # currently always 640x640 (sample size of 1)
-    height: int = 640
 
 
 @dataclass
@@ -60,8 +74,9 @@ class AlbumTracks(Base):
     limit: int
     offset: int
 
+    # Hm, we have to override the "items" field of the dict type we inherit. Surely this won't go badly...
     @property
-    def items(self) -> list["Track"]:
+    def items(self) -> list["Track"]:  # pyright:ignore[reportIncompatibleMethodOverride,reportImplicitOverride]
         return list(map(NoAPI.get_track, self.track_ids))
 
     @property
@@ -88,7 +103,7 @@ class Album(SpotifyBase):
 
     @property
     def artists(self) -> Iterable[Artist]:
-        return list(map(NoAPI.get_artist, self.artist_ids))
+        return map(NoAPI.get_artist, self.artist_ids)
 
     @property
     def tracks(self) -> AlbumTracks:
@@ -140,10 +155,19 @@ class Playlist(SpotifyBase):
     name: str
     description: str
     track_ids: list[str]
+    image_url: str
+
+    @property
+    def images(self) -> list[Image]:
+        return [Image(image_url)]
+
+    @property
+    def tracks_iterable(self) -> Iterable[Track]:
+        return map(NoAPI.get_track, self.track_ids)
 
     @property
     def tracks(self) -> Iterable[Track]:
-        return list(map(NoAPI.get_track, self.track_ids))
+        return list(self.tracks_iterable)
 
 
 @dataclass
@@ -180,7 +204,10 @@ class NoAPI():
         resp = requests.get(uri)
         if not resp.ok:
             raise Exception(f'Failed to get uri "{uri}" - status code: {resp.status_code}')
-        return BeautifulSoup(resp.text, 'html.parser')
+        soup: BeautifulSoup = BeautifulSoup(resp.text, 'html.parser')
+        assert isinstance(soup, BeautifulSoup)
+        return soup
+
 
     @staticmethod
     def _get_meta(soup: BeautifulSoup, name: str, key: str = 'name') -> str:
@@ -286,20 +313,18 @@ class NoAPI():
                 raise SpotifyNoAPIException(f'Could not even get a head when fetching soup for {uri}.')
             results = soup.head.find_all(attrs={'name': 'music:song'})
             tracklist = list(map(lambda x: NoAPI._uri_to_id(NoAPI._get_content(x))[1], results))
+            song_count = int(NoAPI._get_meta(soup, 'music:song_count'))
+            image_url = NoAPI._get_meta(soup, 'og:image')
             title = NoAPI._get_meta(soup, 'og:title', 'property')
             description = NoAPI._get_meta(soup, 'og:description', 'property')
+            if len(tracklist) != song_count:
+                logger.warning(f"Could not read all songs in playlist. Only {len(tracklist)} out of {song_count}. This a current limitation. PRs welcome!")
             return Playlist(
                 id = NoAPI._uri_to_id(uri)[1],
                 name = title,
                 description = description,
-                track_ids = tracklist
+                track_ids = tracklist,
+                image_url = image_url,
             )
         except Exception as e:
             raise SpotifyNoAPIException(f'Could not get track with id {playlist_id}: {e}')
-
-    @staticmethod
-    def search(query: str, type: str) -> Search:
-        # TODO Implement this
-        _ = query
-        _ = type
-        return Search([], [], [], [])

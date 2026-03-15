@@ -8,16 +8,18 @@ __all__ = ["Spotify", "SpotifyException"]
 import json
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from typing import Any
 import warnings
-from collections import defaultdict
 
 import requests
+from requests.adapters import HTTPAdapter
 
-from spotipy.exceptions import SpotifyException
-from spotipy.noapi import Album, Artist, Search, Track
+from spotipy.exceptions import SpotifyException, SpotifyNoAPIExceptionUnsupported, SpotifyNoAPIExceptionUnsupportedPRsWelcome, SpotifyNoAPIExceptionUnsupportedProbablyImpossible
+from spotipy.noapi import Album, Artist, Search, Track, Playlist, Image
 from spotipy.noapi import NoAPI
 from spotipy.util import REQUESTS_SESSION, Retry
+from spotipy.oauth2 import SpotifyAuthBase, SpotifyClientCredentials, SpotifyOAuth
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,9 @@ class Spotify:
             user = sp.user('plamere')
             print(user)
     """
-    max_retries = 3
-    default_retry_codes = (429, 500, 502, 503, 504)
-    country_codes = [
+    max_retries: int = 3
+    default_retry_codes: Sequence[int] = (429, 500, 502, 503, 504)
+    country_codes: list[str] = [
         "AD",
         "AR",
         "AU",
@@ -113,7 +115,7 @@ class Spotify:
     #
     # [1] https://www.iana.org/assignments/uri-schemes/prov/spotify
     # [2] https://developer.spotify.com/documentation/web-api/concepts/spotify-uris-ids
-    _regex_spotify_uri = r'^spotify:(?:(?P<type>track|artist|album|playlist|show|episode|audiobook):(?P<id>[0-9A-Za-z]+)|user:(?P<username>[0-9A-Za-z]+):playlist:(?P<playlistid>[0-9A-Za-z]+))$'  # noqa: E501
+    _regex_spotify_uri: str = r'^spotify:(?:(?P<type>track|artist|album|playlist|show|episode|audiobook):(?P<id>[0-9A-Za-z]+)|user:(?P<username>[0-9A-Za-z]+):playlist:(?P<playlistid>[0-9A-Za-z]+))$'  # noqa: E501
 
     # Spotify URLs are defined at [1]. The assumption is made that they are all
     # pointing to open.spotify.com, so a regex is used to parse them as well,
@@ -124,24 +126,24 @@ class Spotify:
     #
     # [1] https://developer.spotify.com/documentation/web-api/concepts/spotify-uris-ids
     # [2] https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
-    _regex_spotify_url = r'^(http[s]?:\/\/)?open.spotify.com\/(intl-\w\w\/)?(?P<type>track|artist|album|playlist|show|episode|user|audiobook)\/(?P<id>[0-9A-Za-z]+)(\?.*)?$'  # noqa: E501
+    _regex_spotify_url: str = r'^(http[s]?:\/\/)?open.spotify.com\/(intl-\w\w\/)?(?P<type>track|artist|album|playlist|show|episode|user|audiobook)\/(?P<id>[0-9A-Za-z]+)(\?.*)?$'  # noqa: E501
 
-    _regex_base62 = r'^[0-9A-Za-z]+$'
+    _regex_base62: str = r'^[0-9A-Za-z]+$'
 
     def __init__(
         self,
-        auth=None,
-        requests_session=True,
-        client_credentials_manager=None,
-        oauth_manager=None,
-        auth_manager=None,
+        auth: str | None = None,
+        requests_session: bool | requests.Session = True,
+        client_credentials_manager: SpotifyClientCredentials | None = None,
+        oauth_manager: SpotifyOAuth | None = None,
+        auth_manager: SpotifyAuthBase | None = None,
         proxies=None,
-        requests_timeout=5,
+        requests_timeout: int = 5,
         status_forcelist=None,
-        retries=max_retries,
-        status_retries=max_retries,
-        backoff_factor=0.3,
-        language=None,
+        retries: int = max_retries,
+        status_retries: int = max_retries,
+        backoff_factor: float = 0.3,
+        language: str | None = None,
     ):
         """
         Creates a Spotify API client.
@@ -178,11 +180,21 @@ class Spotify:
             The language parameter advertises what language the user prefers to see.
             See ISO-639-1 language code: https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
         """
-        self.prefix = "https://api.spotify.com/v1/"
-        self._auth = auth
-        self.client_credentials_manager = client_credentials_manager
-        self.oauth_manager = oauth_manager
+        self.prefix: str | None = "https://api.spotify.com/v1/"
+        self._auth: str | None = auth
+        if auth is not None:
+            logger.warning(f"You specified an auth token, but it is not used in SpotNoAPI.")
+        self.client_credentials_manager: SpotifyClientCredentials | None = client_credentials_manager
+        if client_credentials_manager is not None:
+            logger.warning(f"You specified a client credentials manager, but it is not used in SpotNoAPI.")
+        self.oauth_manager: SpotifyOAuth | None = oauth_manager
+        if oauth_manager is not None:
+            logger.warning(f"You specified an oauth manager, but it is not used in SpotNoAPI.")
+        self._auth_manager: SpotifyAuthBase | None = None
         self.auth_manager = auth_manager
+        if proxies != None:
+            # proxies not implemented yet, but given that we only use requests, that should be straight forward to implement
+            raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
         self.proxies = proxies
         self.requests_timeout = requests_timeout
         self.status_forcelist = status_forcelist or self.default_retry_codes
@@ -190,24 +202,26 @@ class Spotify:
         self.retries = retries
         self.status_retries = status_retries
         self.language = language
+        if language is not None:
+            logger.warning(f"You set specified language {language}, but language is currently not used in SpotNoAPI.")
 
         if isinstance(requests_session, requests.Session):
-            self._session = requests_session
+            self._session: requests.Session | Any = requests_session  # pyright:ignore[reportExplicitAny]
         else:
             if requests_session:  # Build a new session.
                 self._build_session()
             else:  # Use the Requests API module as a "session".
                 self._session = requests.api
 
-    def set_auth(self, auth):
+    def set_auth(self, auth: str):
         self._auth = auth
 
     @property
-    def auth_manager(self):
+    def auth_manager(self) -> SpotifyAuthBase | None:
         return self._auth_manager
 
     @auth_manager.setter
-    def auth_manager(self, auth_manager):
+    def auth_manager(self, auth_manager: SpotifyAuthBase | None):
         if auth_manager is not None:
             self._auth_manager = auth_manager
         else:
@@ -231,129 +245,28 @@ class Spotify:
             backoff_factor=self.backoff_factor,
             status_forcelist=self.status_forcelist)
 
-        adapter = requests.adapters.HTTPAdapter(max_retries=retry)
-        self._session.mount('http://', adapter)
-        self._session.mount('https://', adapter)
+        adapter = HTTPAdapter(max_retries=retry)
+        _ = self._session.mount('http://', adapter)
+        _ = self._session.mount('https://', adapter)
 
     def _auth_headers(self):
-        return {}
+        raise SpotifyNoAPIExceptionUnsupported
 
-    def _internal_call(self, method, url, payload, params):
-        args = dict(params=params)
-        if not url.startswith("http"):
-            url = self.prefix + url
-        headers = self._auth_headers()
-
-        if "content_type" in args["params"]:
-            headers["Content-Type"] = args["params"]["content_type"]
-            del args["params"]["content_type"]
-            if payload:
-                args["data"] = payload
-        else:
-            headers["Content-Type"] = "application/json"
-            if payload:
-                args["data"] = json.dumps(payload)
-
-        if self.language is not None:
-            headers["Accept-Language"] = self.language
-
-        logger.debug(f"Sending {method} to {url} with Params: "
-                     f"{args.get('params')} Headers: {headers} and Body: {args.get('data')!r}")
-
-        try:
-            response = self._session.request(
-                method, url, headers=headers, proxies=self.proxies,
-                timeout=self.requests_timeout, **args
-            )
-
-            response.raise_for_status()
-            results = response.json()
-        except requests.exceptions.HTTPError as http_error:
-            response = http_error.response
-            try:
-                json_response = response.json()
-                error = json_response.get("error", {})
-                msg = error.get("message")
-                reason = error.get("reason")
-            except ValueError:
-                # if the response cannot be decoded into JSON (which raises a ValueError),
-                # then try to decode it into text
-
-                # if we receive an empty string (which is falsy), then replace it with `None`
-                msg = response.text or None
-                reason = None
-
-            logger.error(f"HTTP Error for {method} to {url} with Params: "
-                         f"{args.get('params')} returned {response.status_code} due to {msg}")
-
-            raise SpotifyException(
-                response.status_code,
-                -1,
-                f"{response.url}:\n {msg}",
-                reason=reason,
-                headers=response.headers,
-            )
-        except requests.exceptions.RetryError as retry_error:
-            request = retry_error.request
-            logger.error('Max Retries reached')
-            try:
-                reason = retry_error.args[0].reason
-            except (IndexError, AttributeError):
-                reason = None
-            raise SpotifyException(
-                429,
-                -1,
-                f"{request.path_url}:\n Max Retries",
-                reason=reason
-            )
-        except ValueError:
-            results = None
-
-        logger.debug(f'RESULTS: {results}')
-        return results
-
-    # def _get(self, url, args=None, payload=None, **kwargs):
-    #     if args:
-    #         kwargs.update(args)
-    #
-    #     return self._internal_call("GET", url, payload, kwargs)
-
-    # def _post(self, url, args=None, payload=None, **kwargs):
-    #     if args:
-    #         kwargs.update(args)
-    #     return self._internal_call("POST", url, payload, kwargs)
-
-    # def _delete(self, url, args=None, payload=None, **kwargs):
-    #     if args:
-    #         kwargs.update(args)
-    #     return self._internal_call("DELETE", url, payload, kwargs)
-
-    # def _put(self, url, args=None, payload=None, **kwargs):
-    #     if args:
-    #         kwargs.update(args)
-    #     return self._internal_call("PUT", url, payload, kwargs)
-
-    def next(self, result):
+    def next(self, result):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ returns the next result given a paged result
 
             Parameters:
                 - result - a previously returned paged result
         """
-        if result["next"]:
-            return self._get(result["next"])
-        else:
-            return None
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def previous(self, result):
+    def previous(self, result):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ returns the previous result given a paged result
 
             Parameters:
                 - result - a previously returned paged result
         """
-        if result["previous"]:
-            return self._get(result["previous"])
-        else:
-            return None
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
     def track(self, track_id: str, market: str | None = None) -> Track:
         """ returns a single track given the track's ID, URI or URL
@@ -363,7 +276,9 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code.
         """
 
-        _ = market
+        if market != None:
+            logger.warning(f"Market parameter is not supported. Not honoring market filter: {market}")
+
         trid = self._get_id("track", track_id)
         return NoAPI.get_track(trid)
 
@@ -375,7 +290,9 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code.
         """
 
-        _ = market
+        if market != None:
+            logger.warning(f"Market parameter is not supported. Not honoring market filter: {market}")
+
         tlist = [self._get_id("track", t) for t in tracks]
         return list(map(NoAPI.get_track, tlist))
 
@@ -400,7 +317,7 @@ class Spotify:
         return list(map(NoAPI.get_artist, tlist))
 
     def artist_albums(
-        self, artist_id, album_type=None, include_groups=None, country=None, limit=20, offset=0
+        self, artist_id, album_type=None, include_groups=None, country=None, limit=20, offset=0  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
     ):
         """ Get Spotify catalog information about an artist's albums
 
@@ -418,37 +335,22 @@ class Spotify:
                 - offset - the index of the first album to return
         """
 
-        if album_type:
-            warnings.warn(
-                "You're using `artist_albums(..., album_type='...')` which will be removed in "
-                "future versions. Please adjust your code accordingly by using "
-                "`artist_albums(..., include_groups='...')` instead.",
-                DeprecationWarning,
-            )
-            include_groups = include_groups or album_type
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-        trid = self._get_id("artist", artist_id)
-        return self._get(
-            "artists/" + trid + "/albums",
-            include_groups=include_groups,
-            country=country,
-            limit=limit,
-            offset=offset,
-        )
-
-    def artist_top_tracks(self, artist_id, country="US"):
+    def artist_top_tracks(self, artist_id, country="US"):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ Get Spotify catalog information about an artist's top 10 tracks
             by country.
+
+            Currently unsupported. PRs welcome.
 
             Parameters:
                 - artist_id - the artist ID, URI or URL
                 - country - limit the response to one particular country.
         """
 
-        trid = self._get_id("artist", artist_id)
-        return self._get("artists/" + trid + "/top-tracks", country=country)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def artist_related_artists(self, artist_id):
+    def artist_related_artists(self, artist_id):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ Get Spotify catalog information about artists similar to an
             identified artist. Similarity is based on analysis of the
             Spotify community's listening history.
@@ -459,13 +361,7 @@ class Spotify:
             Parameters:
                 - artist_id - the artist ID, URI or URL
         """
-        warnings.warn(
-            "You're using `artist_related_artists(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning
-        )
-        trid = self._get_id("artist", artist_id)
-        return self._get("artists/" + trid + "/related-artists")
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def album(self, album_id: str, market: str | None = None) -> Album:
         """ returns a single album given the album's ID, URIs or URL
@@ -475,7 +371,8 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
         """
 
-        _ = market
+        if market != None:
+            logger.warning(f"Market parameter is not supported. Not honoring market filter: {market}")
         trid = self._get_id("album", album_id)
         return NoAPI.get_album(trid)
 
@@ -489,6 +386,9 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code.
 
         """
+
+        if market != None:
+            logger.warning(f"Market parameter is not supported. Not honoring market filter: {market}")
 
         trid = self._get_id("album", album_id)
         album = self.album(trid)
@@ -506,7 +406,7 @@ class Spotify:
         tlist = [self._get_id("album", a) for a in albums]
         return list(map(NoAPI.get_album, tlist))
 
-    def show(self, show_id, market=None):
+    def show(self, show_id, market=None):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ returns a single show given the show's ID, URIs or URL
 
             Parameters:
@@ -518,10 +418,9 @@ class Spotify:
                            provided, the content is considered unavailable for the client.
         """
 
-        trid = self._get_id("show", show_id)
-        return self._get("shows/" + trid, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def shows(self, shows, market=None):
+    def shows(self, shows, market=None):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ returns a list of shows given the show IDs, URIs, or URLs
 
             Parameters:
@@ -533,10 +432,9 @@ class Spotify:
                            provided, the content is considered unavailable for the client.
         """
 
-        tlist = [self._get_id("show", s) for s in shows]
-        return self._get("shows/?ids=" + ",".join(tlist), market=market)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def show_episodes(self, show_id, limit=50, offset=0, market=None):
+    def show_episodes(self, show_id, limit=50, offset=0, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get Spotify catalog information about a show's episodes
 
             Parameters:
@@ -550,12 +448,9 @@ class Spotify:
                            provided, the content is considered unavailable for the client.
         """
 
-        trid = self._get_id("show", show_id)
-        return self._get(
-            "shows/" + trid + "/episodes/", limit=limit, offset=offset, market=market
-        )
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def episode(self, episode_id, market=None):
+    def episode(self, episode_id, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ returns a single episode given the episode's ID, URIs or URL
 
             Parameters:
@@ -567,10 +462,9 @@ class Spotify:
                            provided, the content is considered unavailable for the client.
         """
 
-        trid = self._get_id("episode", episode_id)
-        return self._get("episodes/" + trid, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def episodes(self, episodes, market=None):
+    def episodes(self, episodes, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ returns a list of episodes given the episode IDs, URIs, or URLs
 
             Parameters:
@@ -582,10 +476,9 @@ class Spotify:
                            provided, the content is considered unavailable for the client.
         """
 
-        tlist = [self._get_id("episode", e) for e in episodes]
-        return self._get("episodes/?ids=" + ",".join(tlist), market=market)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def search(self, q: str , limit: int = 10, offset: int = 0, type: str = "track", market: str | None = None) -> Search:
+    def search(self, q: str , limit: int = 10, offset: int = 0, type: str = "track", market: str | None = None) -> Search:  # pyright:ignore[reportUnusedParameter]
         """ searches for an item
 
             Parameters:
@@ -600,10 +493,9 @@ class Spotify:
                 - market - An ISO 3166-1 alpha-2 country code or the string
                            from_token.
         """
-        # TODO
-        return NoAPI.search(q, type)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def search_markets(self, q, limit=10, offset=0, type="track", markets=None, total=None):
+    def search_markets(self, q, limit=10, offset=0, type="track", markets=None, total=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ (experimental) Searches multiple markets for an item
 
             Parameters:
@@ -618,40 +510,25 @@ class Spotify:
                 - markets - A list of ISO 3166-1 alpha-2 country codes. Search all country markets by default.
                 - total - the total number of results to return across multiple markets and types.
         """
-        warnings.warn(
-            "Searching multiple markets is an experimental feature. "
-            "Please be aware that this method's inputs and outputs can change in the future.",
-            UserWarning,
-        )
-        if not markets:
-            markets = self.country_codes
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-        if not (isinstance(markets, list) or isinstance(markets, tuple)):
-            markets = []
-
-        warnings.warn(
-            "Searching multiple markets is poorly performing.",
-            UserWarning,
-        )
-        return self._search_multiple_markets(q, limit, offset, type, markets, total)
-
-    def user(self, user):
+    def user(self, user):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets basic profile information about a Spotify User
 
             Parameters:
                 - user - the id of the usr
         """
-        return self._get("users/" + user)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_playlists(self, limit=50, offset=0):
+    def current_user_playlists(self, limit=50, offset=0):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType]
         """ Get current user playlists without required getting his profile
             Parameters:
                 - limit  - the number of items to return
                 - offset - the index of the first item to return
         """
-        return self._get("me/playlists", limit=limit, offset=offset)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def playlist(self, playlist_id, fields=None, market=None, additional_types=("track",)):
+    def playlist(self, playlist_id: str, fields: str | None = None, market: str | None = None, _additional_types: Sequence[str] = ("track",)) -> Playlist:
         """ Gets playlist by id.
 
             Parameters:
@@ -662,23 +539,25 @@ class Spotify:
                 - additional_types - list of item types to return.
                                      valid types are: track and episode
         """
-        plid = self._get_id("playlist", playlist_id)
-        return self._get(
-            f"playlists/{plid}",
-            fields=fields,
-            market=market,
-            additional_types=",".join(additional_types),
-        )
+        if fields != None:
+            logger.warning(f"Fields parameter is not supported. Not honoring fields filter: {fields}")
+
+        if market != None:
+            logger.warning(f"Market parameter is not supported. Not honoring market filter: {market}")
+
+        if _additional_types != ("track",):
+            logger.warning(f"Additional types parameter is not supported. Not honoring it: {_additional_types}")
+        return NoAPI.get_playlist(playlist_id)
 
     def playlist_tracks(
         self,
-        playlist_id,
-        fields=None,
-        limit=100,
-        offset=0,
-        market=None,
-        additional_types=("track",)
-    ):
+        playlist_id: str,
+        fields: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        market: str | None =None,
+        additional_types: Sequence[str] = ("track",)
+    ) -> Iterable[Track]:
         """ Get full details of the tracks of a playlist.
 
             .. deprecated::
@@ -695,7 +574,7 @@ class Spotify:
                                      valid types are: track and episode
         """
         warnings.warn(
-            "You should use `playlist_items(playlist_id, ...,"
+            "You should use `playlist_items(playlist_id, ...," +
             "additional_types=('track',))` instead",
             DeprecationWarning,
         )
@@ -704,13 +583,9 @@ class Spotify:
 
     def playlist_items(
         self,
-        playlist_id,
-        fields=None,
-        limit=100,
-        offset=0,
-        market=None,
-        additional_types=("track", "episode")
-    ):
+        playlist_id: str,
+        fields: str | None = None, limit: int = 100, offset: int = 0, market: str | None = None, additional_types: Sequence[str] =("track", "episode")  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
+    ) -> Iterable[Track]:
         """ Get full details of the tracks and episodes of a playlist.
 
             Parameters:
@@ -723,25 +598,19 @@ class Spotify:
                                      valid types are: track and episode
         """
         plid = self._get_id("playlist", playlist_id)
-        return self._get(
-            f"playlists/{plid}/tracks",
-            limit=limit,
-            offset=offset,
-            fields=fields,
-            market=market,
-            additional_types=",".join(additional_types)
-        )
+        # TODO honor paging
+        return NoAPI.get_playlist(plid).tracks
 
-    def playlist_cover_image(self, playlist_id):
+    def playlist_cover_image(self, playlist_id: str) -> Image:
         """ Get cover image of a playlist.
 
             Parameters:
                 - playlist_id - the playlist ID, URI or URL
         """
         plid = self._get_id("playlist", playlist_id)
-        return self._get(f"playlists/{plid}/images")
+        return NoAPI.get_playlist(plid).images[0]
 
-    def playlist_upload_cover_image(self, playlist_id, image_b64):
+    def playlist_upload_cover_image(self, playlist_id, image_b64):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Replace the image used to represent a specific playlist
 
             Parameters:
@@ -749,14 +618,9 @@ class Spotify:
                 - image_b64 - image data as a Base64 encoded JPEG image string
                     (maximum payload size is 256 KB)
         """
-        plid = self._get_id("playlist", playlist_id)
-        return self._put(
-            f"playlists/{plid}/images",
-            payload=image_b64,
-            content_type="image/jpeg",
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_playlist(self, user, playlist_id=None, fields=None, market=None):
+    def user_playlist(self, user: str, playlist_id: str | None = None, fields: str | None = None, market: str | None = None):
         """ Gets a single playlist of a user
 
             .. deprecated::
@@ -773,18 +637,15 @@ class Spotify:
             DeprecationWarning,
         )
 
+        logger.warning(f"Not using user ({user}) parameter in call to user_playlist()")
+
         if playlist_id is None:
-            return self._get(f"users/{user}/starred")
+            raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
         return self.playlist(playlist_id, fields=fields, market=market)
 
     def user_playlist_tracks(
         self,
-        user=None,
-        playlist_id=None,
-        fields=None,
-        limit=100,
-        offset=0,
-        market=None,
+        user=None, playlist_id=None, fields=None, limit=100, offset=0, market=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Get full details of the tracks of a playlist owned by a user.
 
@@ -800,19 +661,9 @@ class Spotify:
                 - offset - the index of the first track to return
                 - market - an ISO 3166-1 alpha-2 country code.
         """
-        warnings.warn(
-            "You should use `playlist_tracks(playlist_id)` instead",
-            DeprecationWarning,
-        )
-        return self.playlist_tracks(
-            playlist_id,
-            limit=limit,
-            offset=offset,
-            fields=fields,
-            market=market,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def user_playlists(self, user, limit=50, offset=0):
+    def user_playlists(self, user, limit=50, offset=0):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets playlists of a user
 
             Parameters:
@@ -820,11 +671,9 @@ class Spotify:
                 - limit  - the number of items to return
                 - offset - the index of the first item to return
         """
-        return self._get(
-            f"users/{user}/playlists", limit=limit, offset=offset
-        )
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-    def user_playlist_create(self, user, name, public=True, collaborative=False, description=""):
+    def user_playlist_create(self, user, name, public=True, collaborative=False, description=""):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Creates a playlist for a user
 
             Parameters:
@@ -834,23 +683,11 @@ class Spotify:
                 - collaborative - is the created playlist collaborative
                 - description - the description of the playlist
         """
-        data = {
-            "name": name,
-            "public": public,
-            "collaborative": collaborative,
-            "description": description
-        }
-
-        return self._post(f"users/{user}/playlists", payload=data)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_change_details(
         self,
-        user,
-        playlist_id,
-        name=None,
-        public=None,
-        collaborative=None,
-        description=None,
+        user, playlist_id, name=None, public=None, collaborative=None, description=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -868,15 +705,9 @@ class Spotify:
                 - collaborative - optional is the playlist collaborative
                 - description - optional description of the playlist
         """
-        warnings.warn(
-            "You should use `playlist_change_details(playlist_id, ...)` instead",
-            DeprecationWarning,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        return self.playlist_change_details(playlist_id, name, public,
-                                            collaborative, description)
-
-    def user_playlist_unfollow(self, user, playlist_id):
+    def user_playlist_unfollow(self, user, playlist_id):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ This function is no longer in use, please use the recommended function in the warning!
 
             Unfollows (deletes) a playlist for a user
@@ -889,14 +720,10 @@ class Spotify:
                 - user - the id of the user
                 - name - the name of the playlist
         """
-        warnings.warn(
-            "You should use `current_user_unfollow_playlist(playlist_id)` instead",
-            DeprecationWarning,
-        )
-        return self.current_user_unfollow_playlist(playlist_id)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_add_tracks(
-        self, user, playlist_id, tracks, position=None
+        self, user, playlist_id, tracks, position=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -912,16 +739,10 @@ class Spotify:
                 - tracks - a list of track URIs, URLs or IDs
                 - position - the position to add the tracks
         """
-        warnings.warn(
-            "You should use `playlist_add_items(playlist_id, tracks)` instead",
-            DeprecationWarning,
-        )
-
-        tracks = [self._get_uri("track", tid) for tid in tracks]
-        return self.playlist_add_items(playlist_id, tracks, position)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_add_episodes(
-        self, user, playlist_id, episodes, position=None
+        self, user, playlist_id, episodes, position=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -937,15 +758,9 @@ class Spotify:
                 - episodes - a list of track URIs, URLs or IDs
                 - position - the position to add the episodes
         """
-        warnings.warn(
-            "You should use `playlist_add_items(playlist_id, episodes)` instead",
-            DeprecationWarning,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        episodes = [self._get_uri("episode", tid) for tid in episodes]
-        return self.playlist_add_items(playlist_id, episodes, position)
-
-    def user_playlist_replace_tracks(self, user, playlist_id, tracks):
+    def user_playlist_replace_tracks(self, user, playlist_id, tracks):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ This function is no longer in use, please use the recommended function in the warning!
 
             Replace all tracks in a playlist for a user
@@ -959,20 +774,11 @@ class Spotify:
                 - playlist_id - the id of the playlist
                 - tracks - the list of track ids to add to the playlist
         """
-        warnings.warn(
-            "You should use `playlist_replace_items(playlist_id, tracks)` instead",
-            DeprecationWarning,
-        )
-        return self.playlist_replace_items(playlist_id, tracks)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_reorder_tracks(
         self,
-        user,
-        playlist_id,
-        range_start,
-        insert_before,
-        range_length=1,
-        snapshot_id=None,
+        user, playlist_id, range_start, insert_before, range_length=1, snapshot_id=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -992,16 +798,10 @@ class Spotify:
                                   inserted
                 - snapshot_id - optional playlist's snapshot ID
         """
-        warnings.warn(
-            "You should use `playlist_reorder_items(playlist_id, ...)` instead",
-            DeprecationWarning,
-        )
-        return self.playlist_reorder_items(playlist_id, range_start,
-                                           insert_before, range_length,
-                                           snapshot_id)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_remove_all_occurrences_of_tracks(
-        self, user, playlist_id, tracks, snapshot_id=None
+        self, user, playlist_id, tracks, snapshot_id=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -1017,17 +817,10 @@ class Spotify:
                 - tracks - the list of track ids to remove from the playlist
                 - snapshot_id - optional id of the playlist snapshot
         """
-        warnings.warn(
-            "You should use `playlist_remove_all_occurrences_of_items"
-            "(playlist_id, tracks)` instead",
-            DeprecationWarning,
-        )
-        return self.playlist_remove_all_occurrences_of_items(playlist_id,
-                                                             tracks,
-                                                             snapshot_id)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_remove_specific_occurrences_of_tracks(
-        self, user, playlist_id, tracks, snapshot_id=None
+        self, user, playlist_id, tracks, snapshot_id=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -1046,28 +839,9 @@ class Spotify:
                         { "uri":"1301WleyT98MSxVHPZCA6M", "positions":[7] } ]
                 - snapshot_id - optional id of the playlist snapshot
         """
-        warnings.warn(
-            "You're using `user_playlist_remove_specific_occurrences_of_tracks(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-        plid = self._get_id("playlist", playlist_id)
-        ftracks = []
-        for tr in tracks:
-            ftracks.append(
-                {
-                    "uri": self._get_uri("track", tr["uri"]),
-                    "positions": tr["positions"],
-                }
-            )
-        payload = {"tracks": ftracks}
-        if snapshot_id:
-            payload["snapshot_id"] = snapshot_id
-        return self._delete(
-            f"users/{user}/playlists/{plid}/tracks", payload=payload
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_playlist_follow_playlist(self, playlist_owner_id, playlist_id):
+    def user_playlist_follow_playlist(self, playlist_owner_id, playlist_id):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ This function is no longer in use, please use the recommended function in the warning!
 
             Add the current authenticated user as a follower of a playlist.
@@ -1080,14 +854,10 @@ class Spotify:
                 - playlist_owner_id - the user id of the playlist owner
                 - playlist_id - the id of the playlist
         """
-        warnings.warn(
-            "You should use `current_user_follow_playlist(playlist_id)` instead",
-            DeprecationWarning,
-        )
-        return self.current_user_follow_playlist(playlist_id)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def user_playlist_is_following(
-        self, playlist_owner_id, playlist_id, user_ids
+        self, playlist_owner_id, playlist_id, user_ids  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ This function is no longer in use, please use the recommended function in the warning!
 
@@ -1103,19 +873,11 @@ class Spotify:
                 - user_ids - the ids of the users that you want to check to see
                     if they follow the playlist. Maximum: 5 ids.
         """
-        warnings.warn(
-            "You should use `playlist_is_following(playlist_id, user_ids)` instead",
-            DeprecationWarning,
-        )
-        return self.playlist_is_following(playlist_id, user_ids)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
     def playlist_change_details(
         self,
-        playlist_id,
-        name=None,
-        public=None,
-        collaborative=None,
-        description=None,
+        playlist_id, name=None, public=None, collaborative=None, description=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Changes a playlist's name and/or public/private state,
             collaborative state, and/or description
@@ -1127,33 +889,19 @@ class Spotify:
                 - collaborative - optional is the playlist collaborative
                 - description - optional description of the playlist
         """
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        data = {}
-        if isinstance(name, str):
-            data["name"] = name
-        if isinstance(public, bool):
-            data["public"] = public
-        if isinstance(collaborative, bool):
-            data["collaborative"] = collaborative
-        if isinstance(description, str):
-            data["description"] = description
-        return self._put(
-            f"playlists/{self._get_id('playlist', playlist_id)}", payload=data
-        )
-
-    def current_user_unfollow_playlist(self, playlist_id):
+    def current_user_unfollow_playlist(self, playlist_id):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Unfollows (deletes) a playlist for the current authenticated
             user
 
             Parameters:
                 - playlist_id - the id of the playlist
         """
-        return self._delete(
-            f"playlists/{self._get_id('playlist', playlist_id)}/followers"
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def playlist_add_items(
-        self, playlist_id, items, position=None
+        self, playlist_id, items, position=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Adds tracks/episodes to a playlist
 
@@ -1162,35 +910,19 @@ class Spotify:
                 - items - a list of track/episode URIs or URLs
                 - position - the position to add the tracks
         """
-        plid = self._get_id("playlist", playlist_id)
-        ftracks = [self._get_uri("track", tid) for tid in items]
-        return self._post(
-            f"playlists/{plid}/tracks",
-            payload=ftracks,
-            position=position,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def playlist_replace_items(self, playlist_id, items):
+    def playlist_replace_items(self, playlist_id, items):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Replace all tracks/episodes in a playlist
 
             Parameters:
                 - playlist_id - the id of the playlist
                 - items - list of track/episode ids to comprise playlist
         """
-        plid = self._get_id("playlist", playlist_id)
-        ftracks = [self._get_uri("track", tid) for tid in items]
-        payload = {"uris": ftracks}
-        return self._put(
-            f"playlists/{plid}/tracks", payload=payload
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def playlist_reorder_items(
-        self,
-        playlist_id,
-        range_start,
-        insert_before,
-        range_length=1,
-        snapshot_id=None,
+    def playlist_reorder_items(self,
+        playlist_id, range_start, insert_before, range_length=1, snapshot_id=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Reorder tracks in a playlist
 
@@ -1203,20 +935,10 @@ class Spotify:
                                   inserted
                 - snapshot_id - optional playlist's snapshot ID
         """
-        plid = self._get_id("playlist", playlist_id)
-        payload = {
-            "range_start": range_start,
-            "range_length": range_length,
-            "insert_before": insert_before,
-        }
-        if snapshot_id:
-            payload["snapshot_id"] = snapshot_id
-        return self._put(
-            f"playlists/{plid}/tracks", payload=payload
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def playlist_remove_all_occurrences_of_items(
-        self, playlist_id, items, snapshot_id=None
+        self, playlist_id, items, snapshot_id=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Removes all occurrences of the given tracks/episodes from the given playlist
 
@@ -1226,18 +948,10 @@ class Spotify:
                 - snapshot_id - optional id of the playlist snapshot
 
         """
-
-        plid = self._get_id("playlist", playlist_id)
-        ftracks = [self._get_uri("track", tid) for tid in items]
-        payload = {"tracks": [{"uri": track} for track in ftracks]}
-        if snapshot_id:
-            payload["snapshot_id"] = snapshot_id
-        return self._delete(
-            f"playlists/{plid}/tracks", payload=payload
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def playlist_remove_specific_occurrences_of_items(
-        self, playlist_id, items, snapshot_id=None
+        self, playlist_id, items, snapshot_id=None  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Removes all occurrences of the given tracks from the given playlist
 
@@ -1250,24 +964,9 @@ class Spotify:
                         { "uri":"1301WleyT98MSxVHPZCA6M", "positions":[7] } ]
                 - snapshot_id - optional id of the playlist snapshot
         """
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        plid = self._get_id("playlist", playlist_id)
-        ftracks = []
-        for tr in items:
-            ftracks.append(
-                {
-                    "uri": self._get_uri("track", tr["uri"]),
-                    "positions": tr["positions"],
-                }
-            )
-        payload = {"tracks": ftracks}
-        if snapshot_id:
-            payload["snapshot_id"] = snapshot_id
-        return self._delete(
-            f"playlists/{plid}/tracks", payload=payload
-        )
-
-    def current_user_follow_playlist(self, playlist_id, public=True):
+    def current_user_follow_playlist(self, playlist_id, public=True):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """
         Add the current authenticated user as a follower of a playlist.
 
@@ -1275,13 +974,10 @@ class Spotify:
             - playlist_id - the id of the playlist
 
         """
-        return self._put(
-            f"playlists/{playlist_id}/followers",
-            payload={"public": public}
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def playlist_is_following(
-        self, playlist_id, user_ids
+            self, playlist_id: str, user_ids: list[str]  # pyright:ignore[reportUnusedParameter]
     ):
         """
         Check to see if the given users are following the given playlist
@@ -1292,22 +988,21 @@ class Spotify:
                 if they follow the playlist. Maximum: 5 ids.
 
         """
-        endpoint = f"playlists/{playlist_id}/followers/contains?ids={','.join(user_ids)}"
-        return self._get(endpoint)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
     def me(self):
         """ Get detailed profile information about the current user.
             An alias for the 'current_user' method.
         """
-        return self._get("me/")
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def current_user(self):
         """ Get detailed profile information about the current user.
             An alias for the 'me' method.
         """
-        return self.me()
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_playing_track(self, market=None, additional_types=("track",)):
+    def current_user_playing_track(self, market=None, additional_types=("track",)):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get information about the current users currently playing track.
 
             Parameters:
@@ -1316,55 +1011,43 @@ class Spotify:
                 - additional_types - list of item types to return.
                                      valid types are: track and episode
         """
-        return self._get(
-            "me/player/currently-playing",
-            market=market,
-            additional_types=",".join(additional_types)
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_albums(self, limit=20, offset=0, market=None):
+    def current_user_saved_albums(self, limit=20, offset=0, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets a list of the albums saved in the current authorized user's
-            "Your Music" library
-
-            Parameters:
-                - limit - the number of albums to return (MAX_LIMIT=50)
-                - offset - the index of the first album to return
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
                 - market - an ISO 3166-1 alpha-2 country code.
 
         """
-        return self._get("me/albums", limit=limit, offset=offset, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_albums_add(self, albums=[]):
+    def current_user_saved_albums_add(self, albums):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Add one or more albums to the current user's
             "Your Music" library.
             Parameters:
                 - albums - a list of album URIs, URLs or IDs
         """
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        alist = [self._get_id("album", a) for a in albums]
-        return self._put("me/albums?ids=" + ",".join(alist))
-
-    def current_user_saved_albums_delete(self, albums=[]):
+    def current_user_saved_albums_delete(self, albums):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Remove one or more albums from the current user's
             "Your Music" library.
 
             Parameters:
                 - albums - a list of album URIs, URLs or IDs
         """
-        alist = [self._get_id("album", a) for a in albums]
-        return self._delete("me/albums/?ids=" + ",".join(alist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_albums_contains(self, albums=[]):
+    def current_user_saved_albums_contains(self, albums):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if one or more albums is already saved in
             the current Spotify user’s “Your Music” library.
 
             Parameters:
                 - albums - a list of album URIs, URLs or IDs
         """
-        alist = [self._get_id("album", a) for a in albums]
-        return self._get("me/albums/contains?ids=" + ",".join(alist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_tracks(self, limit=20, offset=0, market=None):
+    def current_user_saved_tracks(self, limit=20, offset=0, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets a list of the tracks saved in the current authorized user's
             "Your Music" library
 
@@ -1374,45 +1057,36 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
 
         """
-        return self._get("me/tracks", limit=limit, offset=offset, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_tracks_add(self, tracks=None):
+    def current_user_saved_tracks_add(self, tracks=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Add one or more tracks to the current user's
             "Your Music" library.
 
             Parameters:
                 - tracks - a list of track URIs, URLs or IDs
         """
-        tlist = []
-        if tracks is not None:
-            tlist = [self._get_id("track", t) for t in tracks]
-        return self._put("me/tracks/?ids=" + ",".join(tlist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_tracks_delete(self, tracks=None):
+    def current_user_saved_tracks_delete(self, tracks=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Remove one or more tracks from the current user's
             "Your Music" library.
 
             Parameters:
                 - tracks - a list of track URIs, URLs or IDs
         """
-        tlist = []
-        if tracks is not None:
-            tlist = [self._get_id("track", t) for t in tracks]
-        return self._delete("me/tracks/?ids=" + ",".join(tlist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_tracks_contains(self, tracks=None):
+    def current_user_saved_tracks_contains(self, tracks=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if one or more tracks is already saved in
             the current Spotify user’s “Your Music” library.
 
             Parameters:
                 - tracks - a list of track URIs, URLs or IDs
         """
-        tlist = []
-        if tracks is not None:
-            tlist = [self._get_id("track", t) for t in tracks]
-        return self._get("me/tracks/contains?ids=" + ",".join(tlist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_episodes(self, limit=20, offset=0, market=None):
+    def current_user_saved_episodes(self, limit=20, offset=0, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets a list of the episodes saved in the current authorized user's
             "Your Music" library
 
@@ -1422,45 +1096,36 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
 
         """
-        return self._get("me/episodes", limit=limit, offset=offset, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_episodes_add(self, episodes=None):
+    def current_user_saved_episodes_add(self, episodes=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Add one or more episodes to the current user's
             "Your Music" library.
 
             Parameters:
                 - episodes - a list of episode URIs, URLs or IDs
         """
-        elist = []
-        if episodes is not None:
-            elist = [self._get_id("episode", e) for e in episodes]
-        return self._put("me/episodes/?ids=" + ",".join(elist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_episodes_delete(self, episodes=None):
+    def current_user_saved_episodes_delete(self, episodes=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Remove one or more episodes from the current user's
             "Your Music" library.
 
             Parameters:
                 - episodes - a list of episode URIs, URLs or IDs
         """
-        elist = []
-        if episodes is not None:
-            elist = [self._get_id("episode", e) for e in episodes]
-        return self._delete("me/episodes/?ids=" + ",".join(elist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_episodes_contains(self, episodes=None):
+    def current_user_saved_episodes_contains(self, episodes=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if one or more episodes is already saved in
             the current Spotify user’s “Your Music” library.
 
             Parameters:
                 - episodes - a list of episode URIs, URLs or IDs
         """
-        elist = []
-        if episodes is not None:
-            elist = [self._get_id("episode", e) for e in episodes]
-        return self._get("me/episodes/contains?ids=" + ",".join(elist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_shows(self, limit=20, offset=0, market=None):
+    def current_user_saved_shows(self, limit=20, offset=0, market=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets a list of the shows saved in the current authorized user's
             "Your Music" library
 
@@ -1470,38 +1135,35 @@ class Spotify:
                 - market - an ISO 3166-1 alpha-2 country code
 
         """
-        return self._get("me/shows", limit=limit, offset=offset, market=market)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_shows_add(self, shows=[]):
+    def current_user_saved_shows_add(self, shows):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Add one or more albums to the current user's
             "Your Music" library.
             Parameters:
                 - shows - a list of show URIs, URLs or IDs
         """
-        slist = [self._get_id("show", s) for s in shows]
-        return self._put("me/shows?ids=" + ",".join(slist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_shows_delete(self, shows=[]):
+    def current_user_saved_shows_delete(self, shows):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Remove one or more shows from the current user's
             "Your Music" library.
 
             Parameters:
                 - shows - a list of show URIs, URLs or IDs
         """
-        slist = [self._get_id("show", s) for s in shows]
-        return self._delete("me/shows/?ids=" + ",".join(slist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_saved_shows_contains(self, shows=[]):
+    def current_user_saved_shows_contains(self, shows):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if one or more shows is already saved in
             the current Spotify user’s “Your Music” library.
 
             Parameters:
                 - shows - a list of show URIs, URLs or IDs
         """
-        slist = [self._get_id("show", s) for s in shows]
-        return self._get("me/shows/contains?ids=" + ",".join(slist))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_followed_artists(self, limit=20, after=None):
+    def current_user_followed_artists(self, limit=20, after=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Gets a list of the artists followed by the current authorized user
 
             Parameters:
@@ -1510,11 +1172,9 @@ class Spotify:
                           request
 
         """
-        return self._get(
-            "me/following", type="artist", limit=limit, after=after
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_following_artists(self, ids=None):
+    def current_user_following_artists(self, ids=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if the current user is following certain artists
 
             Returns list of booleans respective to ids
@@ -1522,14 +1182,9 @@ class Spotify:
             Parameters:
                 - ids - a list of artist URIs, URLs or IDs
         """
-        idlist = []
-        if ids is not None:
-            idlist = [self._get_id("artist", i) for i in ids]
-        return self._get(
-            "me/following/contains", ids=",".join(idlist), type="artist"
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_following_users(self, ids=None):
+    def current_user_following_users(self, ids=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Check if the current user is following certain users
 
             Returns list of booleans respective to ids
@@ -1537,15 +1192,10 @@ class Spotify:
             Parameters:
                 - ids - a list of user URIs, URLs or IDs
         """
-        idlist = []
-        if ids is not None:
-            idlist = [self._get_id("user", i) for i in ids]
-        return self._get(
-            "me/following/contains", ids=",".join(idlist), type="user"
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def current_user_top_artists(
-        self, limit=20, offset=0, time_range="medium_term"
+        self, limit=20, offset=0, time_range="medium_term"  # pyright:ignore[reportUnusedParameter,reportMissingParameterType]
     ):
         """ Get the current user's top artists
 
@@ -1555,12 +1205,10 @@ class Spotify:
                 - time_range - Over what time frame are the affinities computed
                   Valid-values: short_term, medium_term, long_term
         """
-        return self._get(
-            "me/top/artists", time_range=time_range, limit=limit, offset=offset
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def current_user_top_tracks(
-        self, limit=20, offset=0, time_range="medium_term"
+        self, limit=20, offset=0, time_range="medium_term"  # pyright:ignore[reportUnusedParameter,reportMissingParameterType]
     ):
         """ Get the current user's top tracks
 
@@ -1570,11 +1218,9 @@ class Spotify:
                 - time_range - Over what time frame are the affinities computed
                   Valid-values: short_term, medium_term, long_term
         """
-        return self._get(
-            "me/top/tracks", time_range=time_range, limit=limit, offset=offset
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_user_recently_played(self, limit=50, after=None, before=None):
+    def current_user_recently_played(self, limit=50, after=None, before=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get the current user's recently played tracks
 
             Parameters:
@@ -1586,43 +1232,38 @@ class Spotify:
                            before (but not including) this cursor position.
                            Cannot be used if after is specified
         """
-        return self._get(
-            "me/player/recently-played",
-            limit=limit,
-            after=after,
-            before=before,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_follow_artists(self, ids=[]):
+    def user_follow_artists(self, ids: list[str]):  # pyright:ignore[reportUnusedParameter]
         """ Follow one or more artists
             Parameters:
                 - ids - a list of artist IDs
         """
-        return self._put("me/following?type=artist&ids=" + ",".join(ids))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_follow_users(self, ids=[]):
+    def user_follow_users(self, ids: list[str]):  # pyright:ignore[reportUnusedParameter]
         """ Follow one or more users
             Parameters:
                 - ids - a list of user IDs
         """
-        return self._put("me/following?type=user&ids=" + ",".join(ids))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_unfollow_artists(self, ids=[]):
+    def user_unfollow_artists(self, ids: list[str]):  # pyright:ignore[reportUnusedParameter]
         """ Unfollow one or more artists
             Parameters:
                 - ids - a list of artist IDs
         """
-        return self._delete("me/following?type=artist&ids=" + ",".join(ids))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def user_unfollow_users(self, ids=[]):
+    def user_unfollow_users(self, ids: list[str]):  # pyright:ignore[reportUnusedParameter]
         """ Unfollow one or more users
             Parameters:
                 - ids - a list of user IDs
         """
-        return self._delete("me/following?type=user&ids=" + ",".join(ids))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def featured_playlists(
-        self, locale=None, country=None, timestamp=None, limit=20, offset=0
+        self, locale=None, country=None, timestamp=None, limit=20, offset=0  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Get a list of Spotify featured playlists
 
@@ -1648,21 +1289,9 @@ class Spotify:
                   (the first object). Use with limit to get the next set of
                   items.
         """
-        warnings.warn(
-            "You're using `featured_playlists(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-        return self._get(
-            "browse/featured-playlists",
-            locale=locale,
-            country=country,
-            timestamp=timestamp,
-            limit=limit,
-            offset=offset,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def new_releases(self, country=None, limit=20, offset=0):
+    def new_releases(self, country=None, limit=20, offset=0):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get a list of new album releases featured in Spotify
 
             Parameters:
@@ -1675,11 +1304,9 @@ class Spotify:
                   (the first object). Use with limit to get the next set of
                   items.
         """
-        return self._get(
-            "browse/new-releases", country=country, limit=limit, offset=offset
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def category(self, category_id, country=None, locale=None):
+    def category(self, category_id, country=None, locale=None):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get info about a category
 
             Parameters:
@@ -1690,13 +1317,9 @@ class Spotify:
                   language code and an ISO 3166-1 alpha-2 country code, joined
                   by an underscore.
         """
-        return self._get(
-            "browse/categories/" + category_id,
-            country=country,
-            locale=locale,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def categories(self, country=None, locale=None, limit=20, offset=0):
+    def categories(self, country=None, locale=None, limit=20, offset=0):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get a list of categories
 
             Parameters:
@@ -1712,16 +1335,10 @@ class Spotify:
                   (the first object). Use with limit to get the next set of
                   items.
         """
-        return self._get(
-            "browse/categories",
-            country=country,
-            locale=locale,
-            limit=limit,
-            offset=offset,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def category_playlists(
-        self, category_id=None, country=None, limit=20, offset=0
+        self, category_id=None, country=None, limit=20, offset=0  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
     ):
         """ Get a list of playlists for a specific Spotify category
 
@@ -1740,27 +1357,10 @@ class Spotify:
                   (the first object). Use with limit to get the next set of
                   items.
         """
-        warnings.warn(
-            "You're using `category_playlists(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-        return self._get(
-            "browse/categories/" + category_id + "/playlists",
-            country=country,
-            limit=limit,
-            offset=offset,
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def recommendations(
-        self,
-        seed_artists=None,
-        seed_genres=None,
-        seed_tracks=None,
-        limit=20,
-        country=None,
-        **kwargs
-    ):
+    def recommendations(self, seed_artists=None, seed_genres=None, seed_tracks=None,  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
+        limit=20, country=None, **kwargs):  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
         """ Get a list of recommended tracks for one to five seeds.
             (at least one of `seed_artists`, `seed_tracks` and `seed_genres`
             are needed)
@@ -1785,47 +1385,7 @@ class Spotify:
                     attributes listed in the documentation, these values
                     provide filters and targeting on results.
         """
-        warnings.warn(
-            "You're using `recommendations(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-
-        params = dict(limit=limit)
-        if seed_artists:
-            params["seed_artists"] = ",".join(
-                [self._get_id("artist", a) for a in seed_artists]
-            )
-        if seed_genres:
-            params["seed_genres"] = ",".join(seed_genres)
-        if seed_tracks:
-            params["seed_tracks"] = ",".join(
-                [self._get_id("track", t) for t in seed_tracks]
-            )
-        if country:
-            params["market"] = country
-
-        for attribute in [
-            "acousticness",
-            "danceability",
-            "duration_ms",
-            "energy",
-            "instrumentalness",
-            "key",
-            "liveness",
-            "loudness",
-            "mode",
-            "popularity",
-            "speechiness",
-            "tempo",
-            "time_signature",
-            "valence",
-        ]:
-            for prefix in ["min_", "max_", "target_"]:
-                param = prefix + attribute
-                if param in kwargs:
-                    params[param] = kwargs[param]
-        return self._get("recommendations", **params)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def recommendation_genre_seeds(self):
         """ Get a list of genres available for the recommendations function.
@@ -1833,14 +1393,9 @@ class Spotify:
             .. deprecated::
             This endpoint has been removed by Spotify and is no longer available.
         """
-        warnings.warn(
-            "You're using `recommendation_genre_seeds(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-        return self._get("recommendations/available-genre-seeds")
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def audio_analysis(self, track_id):
+    def audio_analysis(self, track_id: str):  # pyright:ignore[reportUnusedParameter]
         """ Get audio analysis for a track based upon its Spotify ID
 
             .. deprecated::
@@ -1849,15 +1404,9 @@ class Spotify:
             Parameters:
                 - track_id - a track URI, URL or ID
         """
-        warnings.warn(
-            "You're using `audio_analysis(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-        trid = self._get_id("track", track_id)
-        return self._get("audio-analysis/" + trid)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def audio_features(self, tracks=[]):
+    def audio_features(self, tracks: str | list[str]):  # pyright:ignore[reportUnusedParameter]
         """ Get audio features for one or multiple tracks based upon their Spotify IDs
 
             .. deprecated::
@@ -1866,50 +1415,32 @@ class Spotify:
             Parameters:
                 - tracks - a list of track URIs, URLs or IDs, maximum: 100 ids
         """
-        warnings.warn(
-            "You're using `audio_features(...)`, "
-            "which is marked as deprecated by Spotify.",
-            DeprecationWarning,
-        )
-
-        if isinstance(tracks, str):
-            trackid = self._get_id("track", tracks)
-            results = self._get("audio-features/?ids=" + trackid)
-        else:
-            tlist = [self._get_id("track", t) for t in tracks]
-            results = self._get("audio-features/?ids=" + ",".join(tlist))
-        # the response has changed, look for the new style first, and if
-        # it's not there, fallback on the old style
-        if "audio_features" in results:
-            return results["audio_features"]
-        else:
-            return results
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def devices(self):
         """ Get a list of user's available devices.
         """
-        return self._get("me/player/devices")
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def current_playback(self, market=None, additional_types=None):
+    def current_playback(self, market=None, additional_types=None):  # pyright:ignore[reportUnusedParameter,reportUnknownParameterType,reportMissingParameterType]
         """ Get information about user's current playback.
 
             Parameters:
                 - market - an ISO 3166-1 alpha-2 country code.
                 - additional_types - `episode` to get podcast track information
         """
-        return self._get("me/player", market=market, additional_types=additional_types)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def currently_playing(self, market=None, additional_types=None):
+    def currently_playing(self, market=None, additional_types=None):  # pyright:ignore[reportUnusedParameter,reportUnknownParameterType,reportMissingParameterType]
         """ Get user's currently playing track.
 
             Parameters:
                 - market - an ISO 3166-1 alpha-2 country code.
                 - additional_types - `episode` to get podcast track information
         """
-        return self._get("me/player/currently-playing", market=market,
-                         additional_types=additional_types)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def transfer_playback(self, device_id, force_play=True):
+    def transfer_playback(self, device_id: str, force_play: bool = True):  # pyright:ignore[reportUnusedParameter]
         """ Transfer playback to another device.
             Note that the API accepts a list of device ids, but only
             actually supports one.
@@ -1919,11 +1450,10 @@ class Spotify:
                 - force_play - true: after transfer, play. false:
                                keep current state.
         """
-        data = {"device_ids": [device_id], "play": force_play}
-        return self._put("me/player", payload=data)
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def start_playback(
-        self, device_id=None, context_uri=None, uris=None, offset=None, position_ms=None
+            self, device_id: str | None = None, context_uri: str | None = None, uris: list[str] | None = None, offset: int | None = None, position_ms: int | None = None  # pyright:ignore[reportUnusedParameter]
     ):
         """ Start or resume user's playback.
 
@@ -1946,167 +1476,89 @@ class Spotify:
                                 greater than the length of the track will cause the player to
                                 start playing the next song.
         """
-        if context_uri is not None and uris is not None:
-            logger.warning("Specify either context uri or uris, not both")
-            return
-        if uris is not None and not isinstance(uris, list):
-            logger.warning("URIs must be a list")
-            return
-        data = {}
-        if context_uri is not None:
-            data["context_uri"] = context_uri
-        if uris is not None:
-            data["uris"] = uris
-        if offset is not None:
-            data["offset"] = offset
-        if position_ms is not None:
-            data["position_ms"] = position_ms
-        return self._put(
-            self._append_device_id("me/player/play", device_id), payload=data
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def pause_playback(self, device_id=None):
+    def pause_playback(self, device_id: str | None =None):  # pyright:ignore[reportUnusedParameter]
         """ Pause user's playback.
 
             Parameters:
                 - device_id - device target for playback
         """
-        return self._put(self._append_device_id("me/player/pause", device_id))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def next_track(self, device_id=None):
+    def next_track(self, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Skip user's playback to next track.
 
             Parameters:
                 - device_id - device target for playback
         """
-        return self._post(self._append_device_id("me/player/next", device_id))
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def previous_track(self, device_id=None):
+    def previous_track(self, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Skip user's playback to previous track.
 
             Parameters:
                 - device_id - device target for playback
         """
-        return self._post(
-            self._append_device_id("me/player/previous", device_id)
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def seek_track(self, position_ms, device_id=None):
+    def seek_track(self, position_ms: int, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Seek to position in current track.
 
             Parameters:
                 - position_ms - position in milliseconds to seek to
                 - device_id - device target for playback
         """
-        if not isinstance(position_ms, int):
-            logger.warning("Position_ms must be an integer")
-            return
-        return self._put(
-            self._append_device_id(
-                f"me/player/seek?position_ms={position_ms}", device_id
-            )
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def repeat(self, state, device_id=None):
+    def repeat(self, state: str, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Set repeat mode for playback.
 
             Parameters:
                 - state - `track`, `context`, or `off`
                 - device_id - device target for playback
         """
-        if state not in ["track", "context", "off"]:
-            logger.warning("Invalid state")
-            return
-        self._put(
-            self._append_device_id(
-                f"me/player/repeat?state={state}", device_id
-            )
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def volume(self, volume_percent, device_id=None):
+    def volume(self, volume_percent: int, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Set playback volume.
 
             Parameters:
                 - volume_percent - volume between 0 and 100
                 - device_id - device target for playback
         """
-        if not isinstance(volume_percent, int):
-            logger.warning("Volume must be an integer")
-            return
-        if volume_percent < 0 or volume_percent > 100:
-            logger.warning("Volume must be between 0 and 100, inclusive")
-            return
-        self._put(
-            self._append_device_id(
-                f"me/player/volume?volume_percent={volume_percent}",
-                device_id,
-            )
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-    def shuffle(self, state, device_id=None):
+    def shuffle(self, state: str, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Toggle playback shuffling.
 
             Parameters:
                 - state - true or false
                 - device_id - device target for playback
         """
-        if not isinstance(state, bool):
-            logger.warning("state must be a boolean")
-            return
-        state = str(state).lower()
-        self._put(
-            self._append_device_id(
-                f"me/player/shuffle?state={state}", device_id
-            )
-        )
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
     def queue(self):
-        """ Gets the current user's queue """
-        return self._get("me/player/queue")
+        """ Gets the current user's queue
 
-    def add_to_queue(self, uri, device_id=None):
+            Unsupported. SpotNoAPI can not interact with user endpoints.
+        """
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
+
+    def add_to_queue(self, uri: str, device_id: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Adds a song to the end of a user's queue
 
-            If device A is currently playing music, and you try to add to the queue
-            and pass in the id for device B, you will get a
-            'Player command failed: Restriction violated' error
-            I therefore recommend leaving device_id as None so that the active device is targeted
-
-            :param uri: song uri, id, or url
-            :param device_id:
-                the id of a Spotify device.
-                If None, then the active device is used.
+            Unsupported. SpotNoAPI can not interact with user endpoints.
 
         """
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        uri = self._get_uri("track", uri)
-
-        endpoint = f"me/player/queue?uri={uri}"
-
-        if device_id is not None:
-            endpoint += f"&device_id={device_id}"
-
-        return self._post(endpoint)
-
-    def available_markets(self):
+    def available_markets(self) -> list[str]:
         """ Get the list of markets where Spotify is available.
             Returns a list of the countries in which Spotify is available, identified by their
             ISO 3166-1 alpha-2 country code with additional country codes for special territories.
         """
-        return self._get("markets")
-
-    def _append_device_id(self, path, device_id):
-        """ Append device ID to API path.
-
-            Parameters:
-                - device_id - device id to append
-        """
-        if device_id:
-            if "?" in path:
-                path += f"&device_id={device_id}"
-            else:
-                path += f"?device_id={device_id}"
-        return path
+        return self.country_codes[:]  # This assumes we won't break anything by just acting as if all markets are available
 
     def _get_id(self, type: str, id: str) -> str:
         uri_match = re.search(Spotify._regex_spotify_uri, id)
@@ -2132,50 +1584,19 @@ class Spotify:
         # TODO change to a ValueError in v3
         raise SpotifyException(400, -1, "Unsupported URL / URI.")
 
-    def _get_uri(self, type, id):
+    def _get_uri(self, type: str, id: str) -> str:
         if self._is_uri(id):
             return id
         else:
             return "spotify:" + type + ":" + self._get_id(type, id)
 
-    def _is_uri(self, uri):
+    def _is_uri(self, uri: str) -> bool:
         return re.search(Spotify._regex_spotify_uri, uri) is not None
 
-    def _search_multiple_markets(self, q, limit, offset, type, markets, total):
-        if total and limit > total:
-            limit = total
-            warnings.warn(f"limit was auto-adjusted to equal {total} "
-                          f"as it must not be higher than total",
-                          UserWarning)
+    def _search_multiple_markets(self, q: str, limit: int, offset: int, type: str, markets: Sequence[str], total: int):  # pyright:ignore[reportUnusedParameter]
+        raise SpotifyNoAPIExceptionUnsupportedProbablyImpossible
 
-        results = defaultdict(dict)
-        item_types = [item_type + "s" for item_type in type.split(",")]
-        count = 0
-
-        for country in markets:
-            result = self._get(
-                "search", q=q, limit=limit, offset=offset, type=type, market=country
-            )
-            for item_type in item_types:
-                results[country][item_type] = result[item_type]
-
-                # Truncate the items list to the current limit
-                if len(results[country][item_type]['items']) > limit:
-                    results[country][item_type]['items'] = \
-                        results[country][item_type]['items'][:limit]
-
-                count += len(results[country][item_type]['items'])
-                if total and limit > total - count:
-                    # when approaching `total` results, adjust `limit` to not request more
-                    # items than needed
-                    limit = total - count
-
-            if total and count >= total:
-                return results
-
-        return results
-
-    def get_audiobook(self, id, market=None):
+    def get_audiobook(self, id: str, market: str | None = None):  # pyright:ignore[reportUnusedParameter]
         """ Get Spotify catalog information for a single audiobook identified by its unique
         Spotify ID.
 
@@ -2183,30 +1604,18 @@ class Spotify:
         - id - the Spotify ID for the audiobook
         - market - an ISO 3166-1 alpha-2 country code.
         """
-        audiobook_id = self._get_id("audiobook", id)
-        endpoint = f"audiobooks/{audiobook_id}"
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-        if market:
-            endpoint += f'?market={market}'
-
-        return self._get(endpoint)
-
-    def get_audiobooks(self, ids, market=None):
+    def get_audiobooks(self, ids, market=None):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ Get Spotify catalog information for multiple audiobooks based on their Spotify IDs.
 
         Parameters:
         - ids - a list of Spotify IDs for the audiobooks
         - market - an ISO 3166-1 alpha-2 country code.
         """
-        audiobook_ids = [self._get_id("audiobook", id) for id in ids]
-        endpoint = f"audiobooks?ids={','.join(audiobook_ids)}"
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome
 
-        if market:
-            endpoint += f'&market={market}'
-
-        return self._get(endpoint)
-
-    def get_audiobook_chapters(self, id, market=None, limit=20, offset=0):
+    def get_audiobook_chapters(self, id, market=None, limit=20, offset=0):  # pyright:ignore[reportUnknownParameterType,reportUnusedParameter,reportMissingParameterType]
         """ Get Spotify catalog information about an audiobook’s chapters.
 
         Parameters:
@@ -2215,10 +1624,4 @@ class Spotify:
         - limit - the maximum number of items to return
         - offset - the index of the first item to return
         """
-        audiobook_id = self._get_id("audiobook", id)
-        endpoint = f"audiobooks/{audiobook_id}/chapters?limit={limit}&offset={offset}"
-
-        if market:
-            endpoint += f'&market={market}'
-
-        return self._get(endpoint)
+        raise SpotifyNoAPIExceptionUnsupportedPRsWelcome

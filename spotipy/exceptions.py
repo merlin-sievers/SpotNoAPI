@@ -45,3 +45,13 @@ class SpotifyStateError(SpotifyOauthError):
 
 class SpotifyNoAPIException(SpotifyBaseException):
     pass
+
+class SpotifyNoAPIExceptionUnsupported(SpotifyNoAPIException):
+    pass
+
+class SpotifyNoAPIExceptionUnsupportedPRsWelcome(SpotifyNoAPIExceptionUnsupported):
+    pass
+
+class SpotifyNoAPIExceptionUnsupportedProbablyImpossible(SpotifyNoAPIExceptionUnsupported):
+    pass
+
