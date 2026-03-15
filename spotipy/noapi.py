@@ -102,8 +102,12 @@ class Album(SpotifyBase):
         return len(self.track_ids)
 
     @property
-    def artists(self) -> Iterable[Artist]:
+    def artists_iterable(self) -> Iterable[Artist]:
         return map(NoAPI.get_artist, self.artist_ids)
+
+    @property
+    def artists(self) -> list[Artist]:
+        return list(self.artists_iterable)
 
     @property
     def tracks(self) -> AlbumTracks:
@@ -145,8 +149,12 @@ class Track(SpotifyBase):
         return NoAPI.get_album(self.album_id)
 
     @property
-    def artists(self) -> Iterable[Artist]:
-        return list(map(NoAPI.get_artist, self.artist_ids))
+    def artists_iterable(self) -> Iterable[Artist]:
+        return map(NoAPI.get_artist, self.artist_ids)
+
+    @property
+    def artists(self) -> list[Artist]:
+        return list(self.artists_iterable)
 
 
 @dataclass
@@ -159,7 +167,7 @@ class Playlist(SpotifyBase):
 
     @property
     def images(self) -> list[Image]:
-        return [Image(image_url)]
+        return [Image(self.image_url)]
 
     @property
     def tracks_iterable(self) -> Iterable[Track]:
@@ -187,8 +195,12 @@ class Search(Base):
         return list(map(NoAPI.get_album, self.album_ids))
 
     @property
-    def artists(self) -> Iterable[Artist]:
-        return list(map(NoAPI.get_artist, self.artist_ids))
+    def artists_iterable(self) -> Iterable[Artist]:
+        return map(NoAPI.get_artist, self.artist_ids)
+
+    @property
+    def artists(self) -> list[Artist]:
+        return list(self.artists_iterable)
 
     @property
     def playlists(self) -> Iterable[Playlist]:

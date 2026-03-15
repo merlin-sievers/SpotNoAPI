@@ -557,7 +557,7 @@ class Spotify:
         offset: int = 0,
         market: str | None =None,
         additional_types: Sequence[str] = ("track",)
-    ) -> Iterable[Track]:
+    ) -> list[Track]:
         """ Get full details of the tracks of a playlist.
 
             .. deprecated::
@@ -585,7 +585,7 @@ class Spotify:
         self,
         playlist_id: str,
         fields: str | None = None, limit: int = 100, offset: int = 0, market: str | None = None, additional_types: Sequence[str] =("track", "episode")  # pyright:ignore[reportUnusedParameter,reportMissingParameterType,reportUnknownParameterType]
-    ) -> Iterable[Track]:
+    ) -> list[Track]:
         """ Get full details of the tracks and episodes of a playlist.
 
             Parameters:
