@@ -326,7 +326,7 @@ class NoAPI():
             results = soup.head.find_all(attrs={'name': 'music:song'})
             tracklist = list(map(lambda x: NoAPI._uri_to_id(NoAPI._get_content(x))[1], results))
             song_count = int(NoAPI._get_meta(soup, 'music:song_count'))
-            image_url = NoAPI._get_meta(soup, 'og:image')
+            image_url = NoAPI._get_meta(soup, 'og:image', 'property')
             title = NoAPI._get_meta(soup, 'og:title', 'property')
             description = NoAPI._get_meta(soup, 'og:description', 'property')
             if len(tracklist) != song_count:
