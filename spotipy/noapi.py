@@ -174,7 +174,7 @@ class Playlist(SpotifyBase):
         return map(NoAPI.get_track, self.track_ids)
 
     @property
-    def tracks(self) -> Iterable[Track]:
+    def tracks(self) -> list[Track]:
         return list(self.tracks_iterable)
 
 

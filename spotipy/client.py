@@ -547,7 +547,8 @@ class Spotify:
 
         if _additional_types != ("track",):
             logger.warning(f"Additional types parameter is not supported. Not honoring it: {_additional_types}")
-        return NoAPI.get_playlist(playlist_id)
+        plid = self._get_id("playlist", playlist_id)
+        return NoAPI.get_playlist(plid)
 
     def playlist_tracks(
         self,
